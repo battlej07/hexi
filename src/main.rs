@@ -2,72 +2,67 @@ use std::{
     env,
     error::Error,
     fs,
-    io::{BufRead, BufReader},
+    io::{self, BufReader, Read},
     process,
 };
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    let config = Config::build(&args).unwrap_or_else(|err| {
-        println!("Problem parsing arguments: {err}");
-        process::exit(1)
-    });
-
-    if let Err(e) = run(config) {
-        println!("Application error: {e}");
+    if let Err(e) = run() {
+        eprintln!("{e}");
         process::exit(1);
     }
 }
 
-struct Config {
-    file_path: String,
-}
+fn run() -> Result<(), Box<dyn Error>> {
+    let path = env::args().nth(1).ok_or("usage: hexi <file>|-")?;
 
-impl Config {
-    fn build(args: &[String]) -> Result<Config, &'static str> {
-        if args.len() < 2 {
-            return Err("Not enough arguments");
-        }
+    let reader: Box<dyn Read> = if path == "-" {
+        Box::new(io::stdin())
+    } else {
+        Box::new(fs::File::open(path)?)
+    };
 
-        let file_path = args[1].clone();
-        Ok(Config { file_path })
-    }
-}
+    let mut reader = BufReader::with_capacity(4096, reader);
 
-fn run(config: Config) -> Result<(), Box<dyn Error>> {
-    const CAP: usize = 256 * 16;
-
-    let file = fs::File::open(config.file_path)?;
-
-    let mut reader = BufReader::with_capacity(CAP, file);
+    let mut buf = [0u8; 4096];
+    let mut offset: u64 = 0;
 
     loop {
-        let lenght = {
-            let buffer = reader.fill_buf()?;
-
-            let mut i: u32 = 0;
-
-            buffer.iter().for_each(|byte| {
-                print!("{byte:02x} ");
-
-                i += 1;
-                if i == 16 {
-                    i = 0;
-                    println!()
-                }
-            });
-
-            buffer.len()
-        };
-
-        if lenght == 0 {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
             break;
         }
-        reader.consume(lenght);
+
+        for chunk in buf[..n].chunks(16) {
+            print_line(offset, chunk);
+            offset += chunk.len() as u64;
+        }
     }
 
-    println!();
-
     Ok(())
+}
+
+fn print_line(offset: u64, bytes: &[u8]) {
+    print!("{offset:08x}: ");
+
+    for b in bytes {
+        print!("{:02x}", b);
+    }
+
+    for _ in 0..(16 - bytes.len()) {
+        print!("   ")
+    }
+
+    print!(" ");
+
+    for &b in bytes {
+        let c = if (0x20..=0x7e).contains(&b) {
+            b as char
+        } else {
+            '.'
+        };
+        print!("{c}")
+    }
+
+    println!()
 }
